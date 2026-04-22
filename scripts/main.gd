@@ -10,6 +10,15 @@ const ENEMY_MAX_HP    := 60.0
 const SPAWN_INTERVAL  := 2.0
 const SPAWN_DIST      := 550.0
 
+# ------------------------------------------------------------------ boss constants
+const BOSS_MAX_HP         := 300.0
+const BOSS_SPEED          := 50.0
+const BOSS_CONTACT_DPS    := 30.0
+const BOSS_SHOOT_INTERVAL := 2.5
+const BOSS_PROJ_SPEED     := 200.0
+const BOSS_PROJ_DAMAGE    := 20.0
+const BOSS_PROJ_LIFETIME  := 4.0
+
 # ------------------------------------------------------------------ upgradeable stats
 var _player_speed  := 220.0
 var _damage_radius := 120.0
@@ -33,6 +42,10 @@ var _spawn_timer       := 0.0
 var _spawn_count       := 1
 var _spawn_interval    := SPAWN_INTERVAL
 
+# ------------------------------------------------------------------ boss / projectiles
+var _boss_pending  := false
+var _projectiles: Array = []
+
 # ------------------------------------------------------------------ UI refs
 var _ui_canvas: CanvasLayer
 var _hp_bar_fg: ColorRect
@@ -51,6 +64,7 @@ func _physics_process(delta: float) -> void:
 	queue_redraw()
 	_move_player()
 	_tick_enemies(delta)
+	_tick_projectiles(delta)
 	_update_ui()
 
 func _draw() -> void:
@@ -59,6 +73,9 @@ func _draw() -> void:
 		draw_circle(_player.position, _damage_radius, Color(0.35, 0.65, 1.0, 0.08))
 		draw_arc(_player.position, _damage_radius, 0.0, TAU, 64,
 				Color(0.45, 0.75, 1.0, 0.5), 1.5)
+	for p in _projectiles:
+		draw_circle(p["pos"], 8.0, Color(1.0, 0.5, 0.0, 0.55))
+		draw_circle(p["pos"], 4.0, Color(1.0, 0.85, 0.2, 1.0))
 
 func _draw_background() -> void:
 	var size := 5000.0
@@ -153,7 +170,68 @@ func _spawn_enemy() -> void:
 	enemy.add_child(hb_fg)
 
 	add_child(enemy)
-	_enemies.append({"node": enemy, "body": body, "hp": ENEMY_MAX_HP, "hb_fg": hb_fg})
+	_enemies.append({
+		"node": enemy, "body": body, "hp": ENEMY_MAX_HP, "hb_fg": hb_fg,
+		"is_boss": false, "hb_w": 28.0, "max_hp": ENEMY_MAX_HP,
+		"contact_dps": CONTACT_DPS, "shoot_timer": 0.0
+	})
+
+func _spawn_boss() -> void:
+	var angle := randf_range(0.0, TAU)
+	var pos   := _player.position + Vector2(cos(angle), sin(angle)) * SPAWN_DIST
+
+	var enemy := CharacterBody2D.new()
+	enemy.motion_mode = CharacterBody2D.MOTION_MODE_FLOATING
+	enemy.position    = pos
+
+	var shape := CircleShape2D.new()
+	shape.radius = 22.0
+	var col := CollisionShape2D.new()
+	col.shape = shape
+	enemy.add_child(col)
+
+	var shadow := Polygon2D.new()
+	shadow.position = Vector2(4, 5)
+	shadow.polygon = PackedVector2Array([
+		Vector2(0, -22), Vector2(16, 0), Vector2(10, 16), Vector2(0, 6),
+		Vector2(-10, 16), Vector2(-16, 0)
+	])
+	shadow.color = Color(0, 0, 0, 0.35)
+	enemy.add_child(shadow)
+
+	var body := Polygon2D.new()
+	body.polygon = PackedVector2Array([
+		Vector2(0, -22), Vector2(16, 0), Vector2(10, 16), Vector2(0, 6),
+		Vector2(-10, 16), Vector2(-16, 0)
+	])
+	body.color = Color(1.0, 0.45, 0.0, 1.0)
+	enemy.add_child(body)
+
+	var hb_bg := ColorRect.new()
+	hb_bg.color    = Color(0.15, 0.15, 0.15, 0.85)
+	hb_bg.size     = Vector2(60.0, 6.0)
+	hb_bg.position = Vector2(-30.0, -36.0)
+	enemy.add_child(hb_bg)
+
+	var hb_fg := ColorRect.new()
+	hb_fg.color    = Color(1.0, 0.5, 0.1, 1.0)
+	hb_fg.size     = Vector2(60.0, 6.0)
+	hb_fg.position = Vector2(-30.0, -36.0)
+	enemy.add_child(hb_fg)
+
+	var lbl := Label.new()
+	lbl.text = "BOSS"
+	lbl.add_theme_font_size_override("font_size", 10)
+	lbl.add_theme_color_override("font_color", Color(1.0, 0.75, 0.2))
+	lbl.position = Vector2(-12.0, -50.0)
+	enemy.add_child(lbl)
+
+	add_child(enemy)
+	_enemies.append({
+		"node": enemy, "body": body, "hp": BOSS_MAX_HP, "hb_fg": hb_fg,
+		"is_boss": true, "hb_w": 60.0, "max_hp": BOSS_MAX_HP,
+		"contact_dps": BOSS_CONTACT_DPS, "shoot_timer": 0.0
+	})
 
 func _tick_enemies(delta: float) -> void:
 	_spawn_timer += delta
@@ -170,17 +248,25 @@ func _tick_enemies(delta: float) -> void:
 		var dist := node.position.distance_to(pp)
 		var dir  := (pp - node.position).normalized()
 
-		node.velocity = dir * ENEMY_SPEED
+		var speed := BOSS_SPEED if e["is_boss"] else ENEMY_SPEED
+		node.velocity = dir * speed
 		node.move_and_slide()
 		(e["body"] as Polygon2D).rotation = dir.angle() + PI / 2.0
 
 		if dist <= _damage_radius:
 			e["hp"] -= _radius_dps * delta
 
-		if dist <= 34.0:
-			_player_hp = maxf(_player_hp - CONTACT_DPS * delta, 0.0)
+		var contact_r := 40.0 if e["is_boss"] else 34.0
+		if dist <= contact_r:
+			_player_hp = maxf(_player_hp - e["contact_dps"] * delta, 0.0)
 
-		(e["hb_fg"] as ColorRect).size.x = 28.0 * maxf(e["hp"] / ENEMY_MAX_HP, 0.0)
+		(e["hb_fg"] as ColorRect).size.x = e["hb_w"] * maxf(e["hp"] / e["max_hp"], 0.0)
+
+		if e["is_boss"]:
+			e["shoot_timer"] += delta
+			if e["shoot_timer"] >= BOSS_SHOOT_INTERVAL:
+				e["shoot_timer"] = 0.0
+				_fire_projectile(node.position, dir)
 
 		if e["hp"] <= 0.0:
 			to_kill.append(e)
@@ -193,6 +279,28 @@ func _tick_enemies(delta: float) -> void:
 	if _player_hp <= 0.0:
 		_on_player_dead()
 
+# ================================================================== boss projectiles
+
+func _fire_projectile(from: Vector2, dir: Vector2) -> void:
+	_projectiles.append({"pos": from, "vel": dir * BOSS_PROJ_SPEED, "life": BOSS_PROJ_LIFETIME})
+
+func _tick_projectiles(delta: float) -> void:
+	if _player == null:
+		return
+	var pp      := _player.position
+	var to_kill := []
+	for p in _projectiles:
+		p["pos"]  += p["vel"] * delta
+		p["life"] -= delta
+		if p["life"] <= 0.0:
+			to_kill.append(p)
+			continue
+		if p["pos"].distance_to(pp) <= 22.0:
+			_player_hp = maxf(_player_hp - BOSS_PROJ_DAMAGE, 0.0)
+			to_kill.append(p)
+	for p in to_kill:
+		_projectiles.erase(p)
+
 # ================================================================== XP / levelling
 
 func _gain_xp() -> void:
@@ -203,6 +311,8 @@ func _gain_xp() -> void:
 		_level         += 1
 		_spawn_count    = ceili(_level / 2.0)
 		_spawn_interval = maxf(0.5, SPAWN_INTERVAL - (_level - 1) * 0.1)
+		if _level % 5 == 0:
+			_boss_pending = true
 		_show_level_up_screen()
 
 func _show_level_up_screen() -> void:
@@ -230,6 +340,14 @@ func _show_level_up_screen() -> void:
 	subtitle.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
 	subtitle.position = Vector2(vp.x * 0.5 - 100.0, vp.y * 0.28 + 56.0)
 	_level_up_canvas.add_child(subtitle)
+
+	if _boss_pending:
+		var warn := Label.new()
+		warn.text = "!! BOSS INCOMING !!"
+		warn.add_theme_font_size_override("font_size", 18)
+		warn.add_theme_color_override("font_color", Color(1.0, 0.45, 0.0))
+		warn.position = Vector2(vp.x * 0.5 - 110.0, vp.y * 0.28 + 88.0)
+		_level_up_canvas.add_child(warn)
 
 	var choices := [
 		["Bigger Radius", "+25% damage radius size", "radius"],
@@ -261,6 +379,9 @@ func _apply_upgrade(id: String) -> void:
 	_level_up_canvas.queue_free()
 	_level_up_canvas = null
 	_leveling_up     = false
+	if _boss_pending:
+		_boss_pending = false
+		_spawn_boss()
 	queue_redraw()
 
 # ================================================================== UI
@@ -338,6 +459,7 @@ func _on_player_dead() -> void:
 	_dead   = true
 	_player.queue_free()
 	_player = null
+	_projectiles.clear()
 	var lbl := Label.new()
 	lbl.text = "YOU DIED"
 	lbl.add_theme_font_size_override("font_size", 64)
