@@ -1,0 +1,13 @@
+[gd_scene format=3 uid="uid://c3world000001"]
+
+[ext_resource type="PackedScene" uid="uid://c3player00001" path="res://scenes/player.tscn" id="1_player"]
+[ext_resource type="Script" uid="uid://b4xo33d10k2ex" path="res://scripts/grid_background.gd" id="2_grid"]
+
+[node name="World" type="Node2D" unique_id=1341079056]
+position = Vector2(-18, 3)
+
+[node name="Background" type="Node2D" parent="." unique_id=453426985]
+z_index = -1
+script = ExtResource("2_grid")
+
+[node name="Player" parent="." unique_id=423374175 instance=ExtResource("1_player")]
